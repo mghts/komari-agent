@@ -1,10 +1,36 @@
 package update
 
 import (
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestContainerSkipsAllSelfUpdates(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "container")
+	if err := os.WriteFile(marker, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldMarker, oldVersion := containerMarkerPath, CurrentVersion
+	oldClient := http.DefaultClient
+	t.Cleanup(func() {
+		containerMarkerPath, CurrentVersion = oldMarker, oldVersion
+		http.DefaultClient = oldClient
+	})
+	containerMarkerPath = marker
+	for _, version := range []string{"1.2.61", "Snapshot-2609150000", "invalid-version"} {
+		CurrentVersion = version
+		if err := CheckAndUpdate(); err != nil {
+			t.Fatalf("container update (%s): %v", version, err)
+		}
+		if http.DefaultClient != oldClient {
+			t.Fatal("container self-update initialized the network client")
+		}
+	}
+}
 
 // TestParseVersion 验证 parseVersion 能够解析各种版本号格式，包括带 v/V 前缀、预发布和构建元数据
 func TestParseVersion(t *testing.T) {

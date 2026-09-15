@@ -1,0 +1,12 @@
+name: CI
+on:
+  push:
+    branches: [komari-agent-1.2.60, build/independent-release]
+  pull_request:
+    branches: [komari-agent-1.2.60]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml

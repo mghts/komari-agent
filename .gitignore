@@ -4,7 +4,10 @@ agent.json
 komari-agent.exe
 komari-agent
 .komari-agent.exe.old
-build/
+build/*
+!build/baseline.json
+/dist/
+.build-cache/
 auto-discovery.json
 net_static.json
 config.json

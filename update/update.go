@@ -20,12 +20,13 @@ import (
 
 var (
 	CurrentVersion string = "0.0.1"
-	Repo           string = "komari-monitor/komari-agent"
+	Repo           string = "mghts/komari-agent"
 )
+
+var containerMarkerPath = "/.komari-agent-container"
 
 const (
 	snapshotVersionPrefix = "Snapshot-"
-	containerMarkerPath   = "/.komari-agent-container"
 	githubAPIBaseURL      = "https://api.github.com"
 )
 
@@ -318,6 +319,10 @@ func checkAndUpdateSnapshot(updater *selfupdate.Updater) error {
 
 // 检查更新并执行自动更新
 func CheckAndUpdate() error {
+	if isContainerAgent() {
+		log.Println("Agent is running in a container; update the Docker image instead of the binary.")
+		return nil
+	}
 	log.Println("Checking update...")
 
 	http.DefaultClient = dnsresolver.GetHTTPClient(60 * time.Second)

@@ -1,0 +1,30 @@
+services:
+  komari-agent:
+    image: ghcr.io/mghts/komari-agent:${AGENT_VERSION:?Set AGENT_VERSION in .env}
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    working_dir: /var/lib/komari-agent
+    cap_drop: [ALL]
+    cap_add: [NET_RAW]
+    security_opt: [no-new-privileges:true]
+    environment:
+      AGENT_ENDPOINT: ${AGENT_ENDPOINT:?Set the panel HTTPS URL}
+      AGENT_TOKEN: ${AGENT_TOKEN:?Set this node token}
+      AGENT_DISABLE_AUTO_UPDATE: 'true'
+      AGENT_DISABLE_WEB_SSH: 'true'
+      AGENT_INCLUDE_MOUNTPOINTS: /host/root
+      HOST_PROC: /host/proc
+      HOST_SYS: /host/sys
+      HOST_ETC: /host/root/etc
+    volumes:
+      - type: bind
+        source: /
+        target: /host/root
+        read_only: true
+        bind:
+          propagation: rslave
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc/os-release:/etc/os-release:ro
+      - ./state:/var/lib/komari-agent
