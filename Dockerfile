@@ -23,4 +23,4 @@ LABEL org.opencontainers.image.source="https://github.com/mghts/komari-agent" \
       org.opencontainers.image.licenses="MIT"
 COPY --from=build /out/komari-agent /app/komari-agent
 ENTRYPOINT ["/app/komari-agent"]
-CMD ["--help"]
+CMD []
