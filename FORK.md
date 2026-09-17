@@ -6,9 +6,9 @@
 
 ```bash
 docker build --target test -t komari-agent-tests .
-docker build --build-arg VERSION=1.2.61-rc.1 --build-arg REVISION="$(git rev-parse HEAD)" -t komari-agent:test .
+docker build --build-arg VERSION=0.0.0-dev --build-arg REVISION="$(git rev-parse HEAD)" -t komari-agent:test .
 python3 scripts/test_installer.py
-bash scripts/smoke.sh komari-agent:test 1.2.61-rc.1
+bash scripts/smoke.sh komari-agent:test 0.0.0-dev
 ```
 
 GitHub Actions 的 `Publish release` 手动输入一个未使用的语义版本。两个原生 Linux runner 分别运行 Go 测试、镜像启动测试，再发布通过测试的同一批镜像与二进制文件。版本中有 `-` 时发布为 Pre-release，不更新 `latest`。不要覆盖旧版本。
@@ -22,13 +22,13 @@ GitHub Actions 的 `Publish release` 手动输入一个未使用的语义版本�
 新节点：
 
 ```bash
-sudo bash install.sh --install-version 1.2.61-rc.1 --endpoint https://monitor.example.com --token YOUR_NODE_TOKEN
+sudo bash install.sh --install-version 1.2.61 --endpoint https://monitor.example.com --token YOUR_NODE_TOKEN
 ```
 
 已有一键安装节点，默认二进制是 `/opt/komari/agent`、服务名是 `komari-agent`。升级时省略 endpoint/token，保留已有 unit、参数及配置：
 
 ```bash
-sudo bash install.sh --install-version 1.2.61-rc.1
+sudo bash install.sh --install-version 1.2.61
 ```
 
 这也是从上游 `1.5.10` 切换到本 fork 的显式降级操作；执行前保存当前版本和配置，核实配套 Server。自定义路径/服务名须传入 `--install-dir`、`--install-service-name`。下载、SHA256、版本检查都成功后才会停止旧服务；旧二进制保留在安装目录的 `backup-<时间>` 中，启动失败时尝试恢复。备份和下载目录不自动删除。脚本确认服务启动后还需在面板检查节点上线。

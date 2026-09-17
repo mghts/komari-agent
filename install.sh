@@ -21,7 +21,7 @@ REPOSITORY = 'mghts/komari-agent'
 
 def version(value):
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?', value):
-        raise argparse.ArgumentTypeError('Use an explicit semantic release version, for example 1.2.61-rc.1.')
+        raise argparse.ArgumentTypeError('Use an explicit semantic release version, for example 1.2.61.')
     return value
 
 def unit_arg(value):
