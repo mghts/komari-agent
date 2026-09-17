@@ -13,11 +13,11 @@ bash scripts/smoke.sh komari-agent:test 1.2.61-rc.1
 
 GitHub Actions 的 `Publish release` 手动输入一个未使用的语义版本。两个原生 Linux runner 分别运行 Go 测试、镜像启动测试，再发布通过测试的同一批镜像与二进制文件。版本中有 `-` 时发布为 Pre-release，不更新 `latest`。不要覆盖旧版本。
 
-产物：`ghcr.io/mghts/komari-agent:<version>`、Linux amd64/arm64 二进制、`install.sh`、`SHA256SUMS`、`build-manifest.json`。首次发布后核实 GHCR 包为 public。旧工作流移至 `.github/legacy-workflows`，原安装脚本保存在 `scripts/upstream-install.sh`，均不作为新发行版入口。
+产物：`ghcr.io/mghts/komari-agent:<version>`、Linux amd64/arm64 二进制、`install.sh`、`SHA256SUMS`、`build-manifest.json`。首次发布后核实 GHCR 包为 public。旧工作流移至 `.github/legacy-workflows`，原安装脚本保存在 `scripts/upstream-install.sh` 和 `scripts/upstream-install.ps1`，均不作为新发行版入口。
 
 ## 系统服务安装及首次迁移
 
-仅支持 Linux/systemd、Python 3、amd64/arm64。先下载选定 Release 的 `install.sh`，再执行。可先加 `--dry-run`，只下载、校验及查询新程序版本。
+仅支持 Linux/systemd、Python 3、amd64/arm64。Windows 不在发布矩阵内，根目录 `install.ps1` 在任何下载或服务变更前直接退出。先下载选定 Release 的 `install.sh`，再执行。可先加 `--dry-run`，只下载、校验及查询新程序版本。
 
 新节点：
 

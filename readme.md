@@ -1,5 +1,7 @@
 # komari-agent
 
+本 fork 仅发布 Linux amd64/arm64，安装、升级和 Docker 部署请先阅读 [FORK.md](FORK.md)。`install.ps1` 会直接退出；旧 Windows 安装器仅保存在 `scripts/upstream-install.ps1` 供历史参考。
+
 ## 配置方式
 
 agent 参数可以通过命令行参数、环境变量或 JSON 配置文件传入。
@@ -31,11 +33,13 @@ export AGENT_TOKEN="your-token"
   "endpoint": "https://example.com",
   "token": "your-token",
   "interval": 3,
-  "disable_auto_update": false,
+  "disable_auto_update": true,
   "disable_web_ssh": false,
   "ignore_unsafe_cert": false
 }
 ```
+
+默认禁用自动更新。明确设置 `disable_auto_update: false` 才订阅本 fork 的正式 Release；RC 不作为更新目标，Docker 通过更换镜像升级。
 
 配置优先级从低到高为：默认值、命令行参数、环境变量、JSON 配置文件。
 

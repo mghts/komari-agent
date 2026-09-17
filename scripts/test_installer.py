@@ -16,6 +16,15 @@ def retained_directory():
     yield tempfile.mkdtemp(prefix='komari-installer-test-')
 
 class InstallerTests(unittest.TestCase):
+    def test_fork_distribution_sources(self):
+        root = Path(__file__).resolve().parents[1]
+        self.assertEqual(namespace['REPOSITORY'], 'mghts/komari-agent')
+        self.assertIn('"mghts/komari-agent"', (root/'update/update.go').read_text())
+        windows = (root/'install.ps1').read_text()
+        self.assertIn('exit 1', windows)
+        self.assertNotIn('Invoke-WebRequest', windows)
+        self.assertNotIn('komari-monitor', windows)
+
     def test_rejects_corrupt_download(self):
         with retained_directory() as temporary:
             root = Path(temporary)
