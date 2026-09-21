@@ -21,13 +21,44 @@ REPOSITORY = 'mghts/komari-agent'
 
 def version(value):
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?', value):
-        raise argparse.ArgumentTypeError('Use an explicit semantic release version, for example 1.2.61.')
+        raise argparse.ArgumentTypeError('Use an explicit semantic release version, for example 1.2.62.')
     return value
 
 def unit_arg(value):
     if any(c in value for c in '\r\n\0'):
         raise ValueError('Newlines and NUL are not allowed in service arguments.')
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"').replace('%', '%%').replace('$', '$$') + '"'
+
+def unit_directory(value):
+    # WorkingDirectory is a path directive, not an ExecStart argument: no quotes
+    # or dollar expansion. Reject characters that cannot be represented literally.
+    if not value.startswith('/') or value != value.strip() or any(c in value for c in '\r\n\0\\'):
+        raise ValueError('Installation directory must be absolute and contain no backslashes, control characters or surrounding whitespace.')
+    return value.replace('%', '%%')
+
+def service_unit(command, directory, legacy=False):
+    working_directory = unit_arg(str(directory)) if legacy else unit_directory(str(directory))
+    return ('[Unit]\nDescription=Komari Agent (mghts)\nAfter=network-online.target\nWants=network-online.target\n\n'
+            '[Service]\nType=simple\nExecStart=' + command + '\nWorkingDirectory=' + working_directory +
+            '\nRestart=always\nRestartSec=5\nUser=root\n\n[Install]\nWantedBy=multi-user.target\n')
+
+def agent_command(target, config, extra=(), legacy=False):
+    executable = unit_arg(str(target))
+    # systemd expands dollars in arguments, but never in the executable path.
+    if not legacy:
+        executable = executable.replace('$$', '$')
+    return executable + ' ' + ' '.join(unit_arg(str(x)) for x in ['--config', config, *extra])
+
+def managed_unit(text, directory, target, config):
+    commands = [line[len('ExecStart='):] for line in text.splitlines() if line.startswith('ExecStart=')]
+    if len(commands) != 1:
+        return None
+    command = commands[0]
+    for legacy in (True, False):
+        prefix = agent_command(target, config, legacy=legacy)
+        if (command == prefix or command.startswith(prefix + ' ')) and text == service_unit(command, directory, legacy=legacy):
+            return service_unit(agent_command(target, config) + command[len(prefix):], directory)
+    return None
 
 def verify(binary, checksum_file, asset):
     entries = [line.split() for line in checksum_file.read_text().splitlines()]
@@ -67,6 +98,7 @@ def main():
     directory = Path(args.install_dir)
     if not directory.is_absolute() or directory.is_symlink():
         parser.error('Installation directory must be an absolute, non-symlink path.')
+    unit_directory(str(directory))
     if bool(args.endpoint) != bool(args.token):
         parser.error('Supply endpoint and token together, or omit both to preserve an existing service.')
     if args.install_ghproxy and not args.install_ghproxy.startswith('https://'):
@@ -98,53 +130,83 @@ def main():
     target = directory/'agent'
     config = directory/'config.json'
     unit = Path('/etc/systemd/system')/service
+    if target.is_symlink() or config.is_symlink() or unit.is_symlink():
+        raise ValueError('Symlink installation files are not supported.')
     fragment = run('systemctl', 'show', service, '--property=FragmentPath', '--value').stdout.strip()
-    existing = bool(fragment)
-    if existing and not args.endpoint:
+    existing = bool(fragment) or unit.exists()
+    original_unit = unit.read_text() if unit.exists() else ''
+    replacement_unit = managed_unit(original_unit, directory, target, config) if not fragment or fragment == str(unit) else None
+    if existing and replacement_unit is None:
         actual = run('systemctl', 'show', service, '--property=ExecStart', '--value').stdout
         if 'path=' + str(target) + ' ' not in actual and 'path=' + str(target) + ';' not in actual:
             raise ValueError('Existing service uses another binary path; supply its --install-dir. No service was changed.')
     if not existing and not args.endpoint:
         raise ValueError('A new installation requires --endpoint and --token.')
     if args.endpoint and (config.exists() or existing):
-        raise ValueError('An installation already exists. Omit endpoint/token to preserve its configuration during upgrade.')
+        saved = json.loads(config.read_text()) if config.exists() else {}
+        if replacement_unit is None or not isinstance(saved, dict) or saved.get('endpoint') != args.endpoint or saved.get('token') != args.token:
+            raise ValueError('An installation already exists with different credentials or a custom service. Omit endpoint/token to preserve its configuration during upgrade.')
+        print('Existing node credentials match. Retrying with the saved configuration and service arguments; installation options are not reapplied.')
+    elif existing and (extra or args.disable_auto_update != 'true' or args.disable_web_ssh or args.ignore_unsafe_cert):
+        raise ValueError('Upgrade mode preserves existing settings; edit the existing configuration separately.')
+    new_install = not existing
+    if new_install:
+        command = agent_command(target, config, extra)
+        replacement_unit = service_unit(command, directory)
     directory.mkdir(parents=True, exist_ok=True)
-    if target.is_symlink() or config.is_symlink() or unit.is_symlink():
-        raise ValueError('Symlink installation files are not supported.')
     backup = directory/('backup-' + str(time.time_ns()))
     backup.mkdir(mode=0o700)
     for source, name in [(target, 'agent'), (config, 'config.json'), (unit, 'service.unit')]:
         if source.exists():
             shutil.copy2(source, backup/name)
-    if args.endpoint:
-        configuration = {'endpoint': args.endpoint, 'token': args.token,
-                         'disable_auto_update': args.disable_auto_update == 'true',
-                         'disable_web_ssh': args.disable_web_ssh,
-                         'ignore_unsafe_cert': args.ignore_unsafe_cert}
-        config.write_text(json.dumps(configuration, indent=2) + '\n')
-        os.chmod(config, 0o600)
-        command = ' '.join(unit_arg(x) for x in [str(target), '--config', str(config), *extra])
-        unit.write_text('[Unit]\nDescription=Komari Agent (mghts)\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nExecStart=' + command + '\nWorkingDirectory=' + unit_arg(str(directory)) + '\nRestart=always\nRestartSec=5\nUser=root\n\n[Install]\nWantedBy=multi-user.target\n')
-    elif extra or args.disable_auto_update != 'true' or args.disable_web_ssh or args.ignore_unsafe_cert:
-        raise ValueError('Upgrade mode preserves existing settings; edit the existing configuration separately.')
     was_active = subprocess.run(['systemctl', 'is-active', '--quiet', service]).returncode == 0
+    step = 'write installation files'
     try:
+        if new_install:
+            configuration = {'endpoint': args.endpoint, 'token': args.token,
+                             'disable_auto_update': args.disable_auto_update == 'true',
+                             'disable_web_ssh': args.disable_web_ssh,
+                             'ignore_unsafe_cert': args.ignore_unsafe_cert}
+            with os.fdopen(os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as output:
+                output.write(json.dumps(configuration, indent=2) + '\n')
+        if replacement_unit is not None and replacement_unit != original_unit:
+            prepared_unit = staged/service
+            prepared_unit.write_text(replacement_unit)
+            os.chmod(prepared_unit, 0o644)
+            atomic_copy(prepared_unit, unit)
+            step = 'reload repaired service definition'
+            run('systemctl', 'daemon-reload')
         if existing:
+            step = 'stop existing service'
             run('systemctl', 'stop', service)
+        step = 'replace binary'
         atomic_copy(staged/asset, target)
+        step = 'reload systemd configuration'
         run('systemctl', 'daemon-reload')
-        if not existing:
-            run('systemctl', 'enable', service)
+        step = 'start service'
         run('systemctl', 'start', service)
         time.sleep(3)
+        step = 'check service is active'
         run('systemctl', 'is-active', '--quiet', service)
+        # New installations and retries are enabled only after successful startup.
+        if new_install or args.endpoint:
+            step = 'enable service'
+            run('systemctl', 'enable', service)
     except Exception:
         subprocess.run(['systemctl', 'stop', service], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if (backup/'agent').exists():
-            atomic_copy(backup/'agent', target)
+        try:
+            if (backup/'agent').exists():
+                atomic_copy(backup/'agent', target)
+            if replacement_unit is not None and replacement_unit != original_unit and (backup/'service.unit').exists():
+                atomic_copy(backup/'service.unit', unit)
+                run('systemctl', 'daemon-reload')
             if was_active:
                 run('systemctl', 'start', service)
-        print('Installation failed. Previous binary restored when available. Backup: ' + str(backup), file=sys.stderr)
+        except Exception:
+            print('Automatic recovery failed; inspect the retained backup before retrying.', file=sys.stderr)
+        print('Installation failed during: ' + step + '. Backup: ' + str(backup), file=sys.stderr)
+        print('New installation files are retained. Retry the same node command, or upgrade without endpoint/token to preserve settings.', file=sys.stderr)
+        print('Inspect locally: systemctl show ' + service + ' -p LoadState -p ActiveState -p SubState -p Result -p LoadError', file=sys.stderr)
         raise
     print('Service started. Confirm the node is online in your panel. Backup: ' + str(backup))
     print('Downloads retained at: ' + str(staged))

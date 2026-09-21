@@ -23,7 +23,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - name: Verify installer
-        run: python3 scripts/test_installer.py
+        env:
+          KOMARI_REQUIRE_SYSTEMD_VERIFY: '1'
+        run: |
+          bash -n install.sh
+          python3 scripts/test_installer.py
+      - name: Verify installation on real systemd
+        run: sudo python3 scripts/test_installer_systemd.py
       - name: Run Go tests
         uses: docker/build-push-action@v6
         with:

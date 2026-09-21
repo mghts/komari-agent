@@ -8,6 +8,8 @@
 docker build --target test -t komari-agent-tests .
 docker build --build-arg VERSION=0.0.0-dev --build-arg REVISION="$(git rev-parse HEAD)" -t komari-agent:test .
 python3 scripts/test_installer.py
+# Linux/systemd 隔离测试（保留测试目录及服务文件，结束后停止测试服务）
+sudo python3 scripts/test_installer_systemd.py
 bash scripts/smoke.sh komari-agent:test 0.0.0-dev
 ```
 
@@ -22,18 +24,20 @@ GitHub Actions 的 `Publish release` 手动输入一个未使用的语义版本�
 新节点：
 
 ```bash
-sudo bash install.sh --install-version 1.2.61 --endpoint https://monitor.example.com --token YOUR_NODE_TOKEN
+sudo bash install.sh --install-version 1.2.62 --endpoint https://monitor.example.com --token YOUR_NODE_TOKEN
 ```
 
 已有一键安装节点，默认二进制是 `/opt/komari/agent`、服务名是 `komari-agent`。升级时省略 endpoint/token，保留已有 unit、参数及配置：
 
 ```bash
-sudo bash install.sh --install-version 1.2.61
+sudo bash install.sh --install-version 1.2.62
 ```
 
 这也是从上游 `1.5.10` 切换到本 fork 的显式降级操作；执行前保存当前版本和配置，核实配套 Server。自定义路径/服务名须传入 `--install-dir`、`--install-service-name`。下载、SHA256、版本检查都成功后才会停止旧服务；旧二进制保留在安装目录的 `backup-<时间>` 中，启动失败时尝试恢复。备份和下载目录不自动删除。脚本确认服务启动后还需在面板检查节点上线。
 
-本 fork 默认禁用自动更新；显式设置 `--disable-auto-update=false` 才订阅 `mghts/komari-agent` 的正式版本。JSON 配置优先于环境变量和命令行，已有配置若写了 false，需手动改为 true。RC 不会作为自动更新的目标。`agent --version` 可安全查询版本。
+自 `1.2.62` 起，安装器修正 systemd `WorkingDirectory` 的引号处理，并在升级时备份、修复旧安装器生成的完整标准 unit；自定义 unit 不会被自动改写。首次启动失败后可以重试相同节点命令，只有 endpoint/token 匹配且 unit 属于本安装器时才允许继续，已有配置及服务参数始终保留，重试命令中的其他选项不会重新应用。不同节点凭据仍会被拒绝。对 `1.2.61` 失败留下的安装，也可使用上面的无 endpoint/token 升级命令恢复。错误会标出失败步骤，并提示检查 systemd 状态，不输出节点凭据。
+
+直接运行 Agent 或安装器时默认禁用自动更新；Web 的 Linux 一键命令默认显式设置 `--disable-auto-update=false`，订阅 `mghts/komari-agent` 的正式版本。手动安装也可传入该参数启用自动更新。JSON 配置优先于环境变量和命令行；已有配置需要修改 `disable_auto_update`，`false` 表示启用，`true` 表示禁用。升级和重试不会更改已有设置。RC 不会作为自动更新的目标。`agent --version` 可安全查询版本。
 
 ## Docker
 
