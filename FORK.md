@@ -39,7 +39,7 @@ sudo bash install.sh --install-version 1.2.63
 
 安装和升级均不创建 `backup-*` 目录，也不自动删除历史备份。替换前的文件仅在安装进程内暂存；正常捕获到启动失败等错误时尝试恢复原程序、配置和服务文件，原先运行的服务会尝试重新启动。进程被强制结束或断电时无法用内存副本恢复。下载目录仍保留供检查。首次安装失败留下的文件可直接用节点命令覆盖重试。错误提示不输出节点凭据。
 
-直接运行 Agent 或安装器时默认禁用自动更新；Web 的 Linux 一键命令默认显式设置 `--disable-auto-update=false`，订阅 `mghts/komari-agent` 的正式版本。手动安装也可传入该参数启用自动更新。JSON 配置优先于环境变量和命令行；`disable_auto_update` 为 `false` 表示启用，为 `true` 表示禁用。带凭据重新安装会应用本次选项；无凭据升级保留已有设置。RC 不会作为自动更新的目标。`agent --version` 可安全查询版本。
+直接运行 Agent 或安装器时默认禁用自动更新；Web 的 Linux 一键命令默认显式设置 `--disable-auto-update=false`，订阅 `mghts/komari-agent` 的正式版本。手动安装也可传入该参数启用自动更新。JSON 配置优先于环境变量和命令行；`disable_auto_update` 为 `false` 表示启用，为 `true` 表示禁用。带凭据重新安装会应用本次选项；无凭据升级保留已有设置。自更新仅安装高于当前版本的正式版，不降级到较旧 Release，也不以 RC 为目标。`agent --version` 可安全查询版本。
 
 ## Docker
 

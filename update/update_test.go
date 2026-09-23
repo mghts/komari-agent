@@ -1,13 +1,58 @@
 package update
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/blang/semver"
+	"github.com/rhysd/go-github-selfupdate/selfupdate"
 )
+
+type fakeStableUpdater struct {
+	release     *selfupdate.Release
+	updated     bool
+	updateError error
+}
+
+func (f *fakeStableUpdater) DetectLatest(string) (*selfupdate.Release, bool, error) {
+	return f.release, f.release != nil, nil
+}
+
+func (f *fakeStableUpdater) UpdateTo(_ *selfupdate.Release, path string) error {
+	f.updated = path != ""
+	return f.updateError
+}
+
+func TestStableUpdateNeverDowngradesOrInstallsPrereleases(t *testing.T) {
+	for _, latest := range []string{"", "1.2.62", "1.2.63", "1.2.64-rc.1"} {
+		t.Run(latest, func(t *testing.T) {
+			updater := &fakeStableUpdater{}
+			if latest != "" {
+				updater.release = &selfupdate.Release{Version: semver.MustParse(latest)}
+			}
+			if err := checkAndUpdateStable(semver.MustParse("1.2.63"), updater); err != nil {
+				t.Fatal(err)
+			}
+			if updater.updated {
+				t.Fatal("downloaded an older, equal or prerelease version")
+			}
+		})
+	}
+}
+
+func TestStableUpdateAttemptsNewerReleaseAndPropagatesFailure(t *testing.T) {
+	want := errors.New("test download failure")
+	updater := &fakeStableUpdater{release: &selfupdate.Release{Version: semver.MustParse("1.2.64")}, updateError: want}
+	err := checkAndUpdateStable(semver.MustParse("1.2.63"), updater)
+	if !updater.updated || !errors.Is(err, want) {
+		t.Fatalf("newer release was not attempted or failure was lost: %v", err)
+	}
+}
 
 func TestContainerSkipsAllSelfUpdates(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "container")

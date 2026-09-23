@@ -247,15 +247,29 @@ func DoUpdateWorks() {
 	}
 }
 
-func checkAndUpdateStable(currentSemVer semver.Version, updater *selfupdate.Updater) error {
-	latest, err := updater.UpdateSelf(currentSemVer, Repo)
+type stableUpdater interface {
+	DetectLatest(string) (*selfupdate.Release, bool, error)
+	UpdateTo(*selfupdate.Release, string) error
+}
+
+func checkAndUpdateStable(currentSemVer semver.Version, updater stableUpdater) error {
+	// UpdateSelf in the pinned dependency also installs older releases. Check
+	// ordering before downloading so a reinstall never downgrades on startup.
+	latest, found, err := updater.DetectLatest(Repo)
 	if err != nil {
 		return fmt.Errorf("failed to check for updates: %v", err)
 	}
 
-	if latest.Version.Equals(currentSemVer) {
-		log.Println("Current version is the latest:", CurrentVersion)
+	if !found || len(latest.Version.Pre) != 0 || !needUpdate(currentSemVer, latest.Version) {
+		log.Println("No newer stable version available:", CurrentVersion)
 		return nil
+	}
+	cmdPath, err := currentExecutablePath()
+	if err != nil {
+		return fmt.Errorf("failed to resolve current executable path: %w", err)
+	}
+	if err := updater.UpdateTo(latest, cmdPath); err != nil {
+		return fmt.Errorf("failed to update to version %s: %w", latest.Version, err)
 	}
 	// Default is installed as a service, so don't automatically restart
 	//execPath, err := os.Executable()
