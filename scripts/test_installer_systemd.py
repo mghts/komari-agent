@@ -5,6 +5,7 @@ systemctl, unit loading, process startup and rollback are not mocked.
 """
 import hashlib
 import io
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -58,9 +59,21 @@ class SystemdInstallerTests(unittest.TestCase):
             active()
             self.assertEqual((directory / 'config.json').read_bytes(), configuration)
 
-            with self.assertRaises(ValueError):
-                install(['-e', 'https://monitor.example.com', '-t', 'different-test-token'])
+            # The second node command must replace credentials, booleans and
+            # extra arguments, then a later command must reset omitted options.
+            changed = ['-e', 'https://new.example.com', '-t', 'different-test-token',
+                       '--disable-web-ssh', '--ignore-unsafe-cert', '--interval', '9']
+            install(changed)
             active()
+            self.assertEqual(json.loads((directory / 'config.json').read_text()), {
+                'endpoint': 'https://new.example.com', 'token': 'different-test-token',
+                'disable_auto_update': True, 'disable_web_ssh': True, 'ignore_unsafe_cert': True})
+            self.assertIn('"--interval" "9"', unit.read_text())
+            self.assertEqual((directory / 'config.json').stat().st_mode & 0o777, 0o600)
+            install(credentials)
+            active()
+            self.assertEqual((directory / 'config.json').read_bytes(), configuration)
+            self.assertEqual(unit.read_bytes(), fixed_unit)
             corrupt = True
             with self.assertRaises(ValueError):
                 install([])
@@ -69,11 +82,13 @@ class SystemdInstallerTests(unittest.TestCase):
 
             payload = bad_binary
             with self.assertRaises(subprocess.CalledProcessError):
-                install([])
+                install(changed)
             active()
             self.assertEqual((directory / 'agent').read_bytes(), good_binary)
             self.assertEqual(unit.read_bytes(), fixed_unit)
             self.assertEqual((directory / 'config.json').read_bytes(), configuration)
+            self.assertEqual(list(directory.glob('backup-*')), [])
+            self.assertEqual(list(directory.glob('*.staged-*')), [])
             payload = good_binary
 
             # Reproduce the exact 1.2.61 invalid directive, then repair without

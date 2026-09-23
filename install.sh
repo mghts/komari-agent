@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Standalone Linux/systemd installer. Downloads and backups are retained.
+# Standalone Linux/systemd installer. Reinstallation replaces configuration.
 set -euo pipefail
 command -v python3 >/dev/null || { echo 'python3 is required.' >&2; exit 1; }
 exec python3 - "$@" <<'PY'
@@ -21,7 +21,7 @@ REPOSITORY = 'mghts/komari-agent'
 
 def version(value):
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?', value):
-        raise argparse.ArgumentTypeError('Use an explicit semantic release version, for example 1.2.62.')
+        raise argparse.ArgumentTypeError('Use an explicit semantic release version, for example 1.2.63.')
     return value
 
 def unit_arg(value):
@@ -75,8 +75,15 @@ def atomic_copy(source, target):
     shutil.copy2(source, staged)
     os.replace(staged, target)
 
+def atomic_write(target, contents, mode):
+    staged = target.with_name(target.name + '.staged-' + str(time.time_ns()))
+    with os.fdopen(os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode), 'wb') as output:
+        output.write(contents)
+        os.fchmod(output.fileno(), mode)
+    os.replace(staged, target)
+
 def main():
-    parser = argparse.ArgumentParser(description='Install or upgrade the mghts Linux Agent with verified downloads and retained backups.')
+    parser = argparse.ArgumentParser(description='Install or reinstall the mghts Linux Agent; endpoint/token replace existing settings. Omit both to upgrade while preserving settings. No backup directories are created.')
     parser.add_argument('--install-version', required=True, type=version)
     parser.add_argument('--install-dir', default='/opt/komari')
     parser.add_argument('--install-service-name', default='komari-agent')
@@ -136,49 +143,41 @@ def main():
     existing = bool(fragment) or unit.exists()
     original_unit = unit.read_text() if unit.exists() else ''
     replacement_unit = managed_unit(original_unit, directory, target, config) if not fragment or fragment == str(unit) else None
+    reconfigure = bool(args.endpoint)
     if existing and replacement_unit is None:
         actual = run('systemctl', 'show', service, '--property=ExecStart', '--value').stdout
         if 'path=' + str(target) + ' ' not in actual and 'path=' + str(target) + ';' not in actual:
             raise ValueError('Existing service uses another binary path; supply its --install-dir. No service was changed.')
     if not existing and not args.endpoint:
         raise ValueError('A new installation requires --endpoint and --token.')
-    if args.endpoint and (config.exists() or existing):
-        saved = json.loads(config.read_text()) if config.exists() else {}
-        if replacement_unit is None or not isinstance(saved, dict) or saved.get('endpoint') != args.endpoint or saved.get('token') != args.token:
-            raise ValueError('An installation already exists with different credentials or a custom service. Omit endpoint/token to preserve its configuration during upgrade.')
-        print('Existing node credentials match. Retrying with the saved configuration and service arguments; installation options are not reapplied.')
-    elif existing and (extra or args.disable_auto_update != 'true' or args.disable_web_ssh or args.ignore_unsafe_cert):
+    if not reconfigure and existing and (extra or args.disable_auto_update != 'true' or args.disable_web_ssh or args.ignore_unsafe_cert):
         raise ValueError('Upgrade mode preserves existing settings; edit the existing configuration separately.')
-    new_install = not existing
-    if new_install:
+    if reconfigure:
         command = agent_command(target, config, extra)
         replacement_unit = service_unit(command, directory)
+        configuration = {'endpoint': args.endpoint, 'token': args.token,
+                         'disable_auto_update': args.disable_auto_update == 'true',
+                         'disable_web_ssh': args.disable_web_ssh,
+                         'ignore_unsafe_cert': args.ignore_unsafe_cert}
     directory.mkdir(parents=True, exist_ok=True)
-    backup = directory/('backup-' + str(time.time_ns()))
-    backup.mkdir(mode=0o700)
-    for source, name in [(target, 'agent'), (config, 'config.json'), (unit, 'service.unit')]:
+    # Keep recovery data only in this process, never in a backup directory.
+    originals = {}
+    for source in (target, config, unit):
         if source.exists():
-            shutil.copy2(source, backup/name)
+            originals[source] = (source.read_bytes(), source.stat().st_mode & 0o777)
     was_active = subprocess.run(['systemctl', 'is-active', '--quiet', service]).returncode == 0
     step = 'write installation files'
     try:
-        if new_install:
-            configuration = {'endpoint': args.endpoint, 'token': args.token,
-                             'disable_auto_update': args.disable_auto_update == 'true',
-                             'disable_web_ssh': args.disable_web_ssh,
-                             'ignore_unsafe_cert': args.ignore_unsafe_cert}
-            with os.fdopen(os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as output:
-                output.write(json.dumps(configuration, indent=2) + '\n')
         if replacement_unit is not None and replacement_unit != original_unit:
-            prepared_unit = staged/service
-            prepared_unit.write_text(replacement_unit)
-            os.chmod(prepared_unit, 0o644)
-            atomic_copy(prepared_unit, unit)
+            atomic_write(unit, replacement_unit.encode(), 0o644)
             step = 'reload repaired service definition'
             run('systemctl', 'daemon-reload')
         if existing:
             step = 'stop existing service'
             run('systemctl', 'stop', service)
+        if reconfigure:
+            step = 'replace configuration'
+            atomic_write(config, (json.dumps(configuration, indent=2) + '\n').encode(), 0o600)
         step = 'replace binary'
         atomic_copy(staged/asset, target)
         step = 'reload systemd configuration'
@@ -188,27 +187,25 @@ def main():
         time.sleep(3)
         step = 'check service is active'
         run('systemctl', 'is-active', '--quiet', service)
-        # New installations and retries are enabled only after successful startup.
-        if new_install or args.endpoint:
+        # Explicit installations are enabled only after successful startup.
+        if reconfigure:
             step = 'enable service'
             run('systemctl', 'enable', service)
     except Exception:
         subprocess.run(['systemctl', 'stop', service], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
-            if (backup/'agent').exists():
-                atomic_copy(backup/'agent', target)
-            if replacement_unit is not None and replacement_unit != original_unit and (backup/'service.unit').exists():
-                atomic_copy(backup/'service.unit', unit)
-                run('systemctl', 'daemon-reload')
+            for path, (contents, mode) in originals.items():
+                atomic_write(path, contents, mode)
+            run('systemctl', 'daemon-reload')
             if was_active:
                 run('systemctl', 'start', service)
         except Exception:
-            print('Automatic recovery failed; inspect the retained backup before retrying.', file=sys.stderr)
-        print('Installation failed during: ' + step + '. Backup: ' + str(backup), file=sys.stderr)
-        print('New installation files are retained. Retry the same node command, or upgrade without endpoint/token to preserve settings.', file=sys.stderr)
+            print('Automatic recovery failed; inspect the service state before retrying.', file=sys.stderr)
+        print('Installation failed during: ' + step + '. Existing files were restored when possible; no backup directory was created.', file=sys.stderr)
+        print('Retry the node installation command. Files from a first installation are retained for retry.', file=sys.stderr)
         print('Inspect locally: systemctl show ' + service + ' -p LoadState -p ActiveState -p SubState -p Result -p LoadError', file=sys.stderr)
         raise
-    print('Service started. Confirm the node is online in your panel. Backup: ' + str(backup))
+    print('Service started. Confirm the node is online in your panel.')
     print('Downloads retained at: ' + str(staged))
 
 if __name__ == '__main__':

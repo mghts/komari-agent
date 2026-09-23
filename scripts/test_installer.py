@@ -118,9 +118,7 @@ class InstallerTests(unittest.TestCase):
         if corrupt:
             self.assertFalse(calls, 'Unverified downloads must never touch the service')
         else:
-            backups = list(directory.glob('backup-*/agent'))
-            self.assertEqual(len(backups), 1)
-            self.assertEqual(backups[0].read_bytes(), b'old binary')
+            self.assertEqual(list(directory.glob('backup-*')), [])
             self.assertIn(('systemctl', 'stop', 'komari-agent.service'), calls)
             if fail_start:
                 self.assertEqual(calls.count(('systemctl', 'start', 'komari-agent.service')), 2)
@@ -152,7 +150,8 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(fixed.returncode, 0, fixed.stderr)
 
     def exercise_install(self, *, legacy=False, fail_step=None, retry=False,
-                         wrong_token=False, upgrade=False, custom_unit=False):
+                         wrong_token=False, upgrade=False, custom_unit=False,
+                         changed_options=False, orphan_config=False):
         root = Path(tempfile.mkdtemp(prefix='komari-new-install-test-'))
         directory, units = root/'installation', root/'units'
         directory.mkdir()
@@ -162,9 +161,11 @@ class InstallerTests(unittest.TestCase):
         command = ' '.join(namespace['unit_arg'](str(x)) for x in [binary, '--config', config, *extra])
         saved = {'endpoint': 'https://monitor.example.com', 'token': 'test-only-secret',
                  'disable_auto_update': False, 'disable_web_ssh': False, 'ignore_unsafe_cert': False}
+        if orphan_config:
+            config.write_text('{"endpoint":"https://old.example.com","token":"old-token"}')
         if legacy:
             binary.write_bytes(b'old binary')
-            config.write_text(json.dumps(saved))
+            config.write_text(json.dumps({**saved, 'interval': 99, 'old_custom_setting': 'discard-on-reinstall'}))
             unit.write_text(namespace['service_unit'](command, directory, legacy=True))
             if custom_unit:
                 unit.write_text(unit.read_text() + '# custom service\n')
@@ -203,9 +204,20 @@ class InstallerTests(unittest.TestCase):
             return subprocess.CompletedProcess(args, 3 if args[1] == 'is-active' else 0, stdout='', stderr='')
 
         argv = ['install.sh', '--install-version', '1.2.62', '--install-dir', str(directory)]
+        expected = dict(saved)
+        if upgrade:
+            expected.update(interval=99, old_custom_setting='discard-on-reinstall')
+        if wrong_token:
+            expected.update(endpoint='https://new.example.com', token='different-test-token')
+        if changed_options:
+            expected.update(disable_auto_update=True, disable_web_ssh=True, ignore_unsafe_cert=True)
+            extra = ['--interval', '9']
+            command = namespace['agent_command'](binary, config, extra)
         if not upgrade:
-            argv += ['--endpoint', saved['endpoint'], '--token', 'different-test-token' if wrong_token else saved['token'],
-                     '--disable-auto-update=false', *extra]
+            argv += ['--endpoint', expected['endpoint'], '--token', expected['token'],
+                     '--disable-auto-update=' + str(expected['disable_auto_update']).lower(), *extra]
+            if changed_options:
+                argv += ['--disable-web-ssh', '--ignore-unsafe-cert']
         errors = io.StringIO()
         with patch.dict(namespace, {'Path': lambda p: units if str(p) == '/etc/systemd/system' else Path(p), 'run': run}), \
              patch.object(namespace['sys'], 'argv', argv), \
@@ -216,19 +228,13 @@ class InstallerTests(unittest.TestCase):
              patch.object(namespace['shutil'], 'which', return_value='/usr/bin/systemctl'), \
              patch.object(namespace['time'], 'sleep'), \
              patch.object(namespace['subprocess'], 'run', side_effect=safe_run), redirect_stderr(errors):
-            if wrong_token or custom_unit:
-                with self.assertRaises(ValueError):
-                    namespace['main']()
-                self.assertEqual(config.read_bytes(), original_config)
-                self.assertEqual(unit.read_bytes(), original_unit)
-                self.assertEqual(binary.read_bytes(), b'old binary')
-                self.assertNotIn(('systemctl', 'stop', 'komari-agent.service'), calls)
-                return
             if fail_step:
                 with self.assertRaises(subprocess.CalledProcessError):
                     namespace['main']()
                 self.assertIn('Installation failed during:', errors.getvalue())
                 self.assertNotIn('test-only-secret', errors.getvalue())
+                self.assertEqual(list(directory.glob('backup-*')), [])
+                self.assertEqual(list(units.glob('*.staged-*')), [])
                 if legacy:
                     self.assertEqual(binary.read_bytes(), b'old binary')
                     self.assertEqual(unit.read_bytes(), original_unit)
@@ -244,14 +250,16 @@ class InstallerTests(unittest.TestCase):
                 original = config.read_bytes()
                 namespace['main']()
                 self.assertEqual(config.read_bytes(), original)
-        self.assertEqual(json.loads(config.read_text()), saved)
+        self.assertEqual(json.loads(config.read_text()), expected)
         self.assertEqual(binary.read_bytes(), new_binary)
         self.assertEqual(unit.read_text(), namespace['service_unit'](command, directory))
-        if not legacy:
+        if not upgrade:
             self.assertEqual(config.stat().st_mode & 0o777, 0o600)
-        else:
+        if upgrade:
             self.assertEqual(config.read_bytes(), original_config)
-            self.assertTrue(any(p.read_bytes() == original_unit for p in directory.glob('backup-*/service.unit')))
+        self.assertEqual(list(directory.glob('backup-*')), [])
+        self.assertEqual(list(directory.glob('*.staged-*')), [])
+        self.assertEqual(list(units.glob('*.staged-*')), [])
         if not upgrade:
             self.assertIn(('systemctl', 'enable', 'komari-agent.service'), calls)
 
@@ -276,11 +284,20 @@ class InstallerTests(unittest.TestCase):
     def test_failed_legacy_repair_restores_binary_and_unit(self):
         self.exercise_install(legacy=True, fail_step='start')
 
-    def test_different_credentials_never_overwrite_installation(self):
+    def test_reinstall_replaces_endpoint_and_token(self):
         self.exercise_install(legacy=True, wrong_token=True)
 
-    def test_custom_unit_is_not_automatically_rewritten(self):
+    def test_reinstall_replaces_custom_unit_for_same_agent(self):
         self.exercise_install(legacy=True, custom_unit=True)
+
+    def test_reinstall_replaces_options_and_service_arguments(self):
+        self.exercise_install(legacy=True, changed_options=True)
+
+    def test_reinstall_overwrites_orphan_configuration(self):
+        self.exercise_install(orphan_config=True)
+
+    def test_failed_reconfiguration_restores_all_old_files(self):
+        self.exercise_install(legacy=True, wrong_token=True, changed_options=True, fail_step='start')
 
     def test_working_directory_is_literal(self):
         self.assertEqual(namespace['unit_directory']('/opt/komari space/$name%value'), '/opt/komari space/$name%%value')

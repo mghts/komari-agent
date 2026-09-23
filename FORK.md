@@ -21,23 +21,25 @@ GitHub Actions 的 `Publish release` 手动输入一个未使用的语义版本�
 
 仅支持 Linux/systemd、Python 3、amd64/arm64。Windows 不在发布矩阵内，根目录 `install.ps1` 在任何下载或服务变更前直接退出。先下载选定 Release 的 `install.sh`，再执行。可先加 `--dry-run`，只下载、校验及查询新程序版本。
 
-新节点：
+新节点或重新安装（本次命令的配置覆盖旧配置）：
 
 ```bash
-sudo bash install.sh --install-version 1.2.62 --endpoint https://monitor.example.com --token YOUR_NODE_TOKEN
+sudo bash install.sh --install-version 1.2.63 --endpoint https://monitor.example.com --token YOUR_NODE_TOKEN
 ```
 
 已有一键安装节点，默认二进制是 `/opt/komari/agent`、服务名是 `komari-agent`。升级时省略 endpoint/token，保留已有 unit、参数及配置：
 
 ```bash
-sudo bash install.sh --install-version 1.2.62
+sudo bash install.sh --install-version 1.2.63
 ```
 
-这也是从上游 `1.5.10` 切换到本 fork 的显式降级操作；执行前保存当前版本和配置，核实配套 Server。自定义路径/服务名须传入 `--install-dir`、`--install-service-name`。下载、SHA256、版本检查都成功后才会停止旧服务；旧二进制保留在安装目录的 `backup-<时间>` 中，启动失败时尝试恢复。备份和下载目录不自动删除。脚本确认服务启动后还需在面板检查节点上线。
+这也是从上游 `1.5.10` 切换到本 fork 的显式降级操作；执行前核实配套 Server。自定义路径/服务名须传入 `--install-dir`、`--install-service-name`。下载、SHA256、版本检查都成功后才会停止旧服务。脚本确认服务启动后还需在面板检查节点上线。
 
-自 `1.2.62` 起，安装器修正 systemd `WorkingDirectory` 的引号处理，并在升级时备份、修复旧安装器生成的完整标准 unit；自定义 unit 不会被自动改写。首次启动失败后可以重试相同节点命令，只有 endpoint/token 匹配且 unit 属于本安装器时才允许继续，已有配置及服务参数始终保留，重试命令中的其他选项不会重新应用。不同节点凭据仍会被拒绝。对 `1.2.61` 失败留下的安装，也可使用上面的无 endpoint/token 升级命令恢复。错误会标出失败步骤，并提示检查 systemd 状态，不输出节点凭据。
+自 `1.2.63` 起，重复执行带 endpoint/token 的安装命令会覆盖已有二进制、`config.json` 和服务主文件。同一节点、新 token 或新面板地址都可直接重新安装；本次未指定的选项恢复安装器默认值，旧配置中的其他字段及旧启动参数不再沿用。原服务使用其他二进制路径时，仍需提供正确的 `--install-dir`。省略 endpoint/token 的升级方式继续保留旧配置及自定义服务，并修复 `1.2.61` 安装器生成的标准 `WorkingDirectory` 错误。
 
-直接运行 Agent 或安装器时默认禁用自动更新；Web 的 Linux 一键命令默认显式设置 `--disable-auto-update=false`，订阅 `mghts/komari-agent` 的正式版本。手动安装也可传入该参数启用自动更新。JSON 配置优先于环境变量和命令行；已有配置需要修改 `disable_auto_update`，`false` 表示启用，`true` 表示禁用。升级和重试不会更改已有设置。RC 不会作为自动更新的目标。`agent --version` 可安全查询版本。
+安装和升级均不创建 `backup-*` 目录，也不自动删除历史备份。替换前的文件仅在安装进程内暂存；正常捕获到启动失败等错误时尝试恢复原程序、配置和服务文件，原先运行的服务会尝试重新启动。进程被强制结束或断电时无法用内存副本恢复。下载目录仍保留供检查。首次安装失败留下的文件可直接用节点命令覆盖重试。错误提示不输出节点凭据。
+
+直接运行 Agent 或安装器时默认禁用自动更新；Web 的 Linux 一键命令默认显式设置 `--disable-auto-update=false`，订阅 `mghts/komari-agent` 的正式版本。手动安装也可传入该参数启用自动更新。JSON 配置优先于环境变量和命令行；`disable_auto_update` 为 `false` 表示启用，为 `true` 表示禁用。带凭据重新安装会应用本次选项；无凭据升级保留已有设置。RC 不会作为自动更新的目标。`agent --version` 可安全查询版本。
 
 ## Docker
 
